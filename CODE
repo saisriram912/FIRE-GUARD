@@ -1,0 +1,110 @@
+#include <Servo.h>
+
+// ── Pin assignments ──────────────────────────────
+const int FLAME_PIN = 8;
+const int SERVO_PIN = 3;
+const int IN1_PIN   = 6;      // IN2 wired to GND directly
+
+// ── Tuning ───────────────────────────────────────
+const int   CONFIRM_READS = 5;
+const long  PUMP_ON_MS    = 5000;
+const long  COOLDOWN_MS   = 3000;
+const int   SCAN_STEP     = 1;
+const int   SCAN_DELAY    = 18;
+const int   SCAN_MIN      = 60;
+const int   SCAN_MAX      = 120;
+
+// ── State ────────────────────────────────────────
+Servo myServo;
+int   scanAngle   = 90;
+int   scanDir     = 1;
+int   flameCount  = 0;
+bool  pumpActive  = false;
+unsigned long pumpStartTime = 0;
+unsigned long cooldownUntil = 0;
+
+// ────────────────────────────────────────────────
+bool flameConfirmedRaw() {
+  int hits = 0;
+  for (int i = 0; i < 3; i++) {
+    if (digitalRead(FLAME_PIN) == LOW) hits++;
+    delay(2);
+  }
+  return hits == 3;
+}
+
+void pumpOn() {
+  digitalWrite(IN1_PIN, HIGH);
+  Serial.println(">> PUMP ON");
+}
+
+void pumpOff() {
+  digitalWrite(IN1_PIN, LOW);
+  Serial.println(">> PUMP OFF");
+}
+
+// ────────────────────────────────────────────────
+void setup() {
+  Serial.begin(9600);
+  pinMode(FLAME_PIN, INPUT);
+  pinMode(IN1_PIN, OUTPUT);
+  pumpOff();
+  myServo.attach(SERVO_PIN);
+  myServo.write(scanAngle);
+  Serial.println("System ready. Scanning...");
+}
+
+// ────────────────────────────────────────────────
+void loop() {
+  unsigned long now = millis();
+
+  // 1. Pump is running — wait it out
+  if (pumpActive) {
+    if (now - pumpStartTime >= (unsigned long)PUMP_ON_MS) {
+      pumpOff();
+      pumpActive    = false;
+      flameCount    = 0;
+      cooldownUntil = now + COOLDOWN_MS;
+      Serial.println("Cooldown started...");
+    }
+    return;
+  }
+
+  // 2. Cooldown — sensor ignored
+  if (now < cooldownUntil) {
+    delay(50);
+    return;
+  }
+
+  // 3. Move servo
+  myServo.write(scanAngle);
+
+  // 4. Check for flame
+  if (flameConfirmedRaw()) {
+    flameCount++;
+    Serial.print("Flame count: ");
+    Serial.println(flameCount);
+
+    if (flameCount >= CONFIRM_READS) {
+      Serial.println("*** FIRE DETECTED ***");
+      pumpOn();
+      pumpActive    = true;
+      pumpStartTime = now;
+      return;
+    }
+    delay(SCAN_DELAY);
+    return;
+  }
+
+  // 5. No flame — reset and keep scanning
+  if (flameCount > 0) {
+    Serial.println("Flame lost. Resuming scan.");
+    flameCount = 0;
+  }
+
+  scanAngle += scanDir * SCAN_STEP;
+  if (scanAngle >= SCAN_MAX || scanAngle <= SCAN_MIN) {
+    scanDir = -scanDir;
+  }
+  delay(SCAN_DELAY);
+}
